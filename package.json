@@ -1,0 +1,14 @@
+{
+  "name": "heroui-demo-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present",
+    "dev:web": "npm run dev -w apps/web",
+    "preview:web": "npm run preview -w apps/web"
+  }
+}
