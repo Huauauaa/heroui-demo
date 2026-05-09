@@ -37,6 +37,12 @@ npm run dev:web     # 启动前端开发服务
 npm run preview:web # 预览构建产物
 ```
 
+## GitHub Pages
+
+仓库包含 `.github/workflows/deploy-pages.yml`。推送到 `main` 后会自动构建 `apps/web` 并部署到 GitHub Pages。
+
+部署前需要在 GitHub 仓库设置中启用 Pages，并将 Source 设置为 `GitHub Actions`。
+
 ## 环境变量
 
 复制 `apps/web/.env.example` 为 `apps/web/.env` 后可配置：
