@@ -1,17 +1,20 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
+  AlertDialog,
   Avatar,
   Button,
   Card,
   Chip,
   Input,
   Label,
+  Modal,
   Separator,
   Spinner,
   Surface,
   Switch,
   TextArea,
+  useOverlayState,
 } from '@heroui/react';
 import {
   createPost,
@@ -44,12 +47,24 @@ interface PostsPageProps {
 
 export function PostsPage({ session, onLogout }: PostsPageProps) {
   const [posts, setPosts] = useState<Post[]>([]);
-  const [form, setForm] = useState(EMPTY_FORM);
+  const [createForm, setCreateForm] = useState(EMPTY_FORM);
+  const [editForm, setEditForm] = useState(EMPTY_FORM);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [error, setError] = useState('');
+  const [editError, setEditError] = useState('');
+  const [deletingId, setDeletingId] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [showOnlyMine, setShowOnlyMine] = useState(true);
+  const editModalState = useOverlayState({
+    onOpenChange(nextIsOpen) {
+      if (!nextIsOpen) {
+        setEditingId(null);
+        setEditForm(EMPTY_FORM);
+        setEditError('');
+      }
+    },
+  });
 
   const editingPost = useMemo(
     () => posts.find((post) => post.id === editingId),
@@ -88,27 +103,28 @@ export function PostsPage({ session, onLogout }: PostsPageProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.user.id]);
 
-  function resetForm() {
-    setForm(EMPTY_FORM);
-    setEditingId(null);
+  function resetCreateForm() {
+    setCreateForm(EMPTY_FORM);
   }
 
   function beginEdit(post: Post) {
     setEditingId(post.id);
-    setForm({
+    setEditForm({
       title: post.title,
       body: post.body,
     });
+    setEditError('');
+    editModalState.open();
   }
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleCreateSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError('');
     setIsSaving(true);
 
     const payload: PostPayload = {
-      title: form.title.trim(),
-      body: form.body.trim(),
+      title: createForm.title.trim(),
+      body: createForm.body.trim(),
       userId: session.user.id,
     };
 
@@ -119,18 +135,9 @@ export function PostsPage({ session, onLogout }: PostsPageProps) {
     }
 
     try {
-      if (editingId) {
-        const updatedPost = await updatePost(editingId, payload);
-        setPosts((currentPosts) =>
-          currentPosts.map((post) =>
-            post.id === editingId ? { ...post, ...updatedPost, ...payload } : post,
-          ),
-        );
-      } else {
-        const createdPost = await createPost(payload);
-        setPosts((currentPosts) => [{ ...createdPost, ...payload }, ...currentPosts]);
-      }
-      resetForm();
+      const createdPost = await createPost(payload);
+      setPosts((currentPosts) => [{ ...createdPost, ...payload }, ...currentPosts]);
+      resetCreateForm();
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : '保存 post 失败');
     } finally {
@@ -138,27 +145,66 @@ export function PostsPage({ session, onLogout }: PostsPageProps) {
     }
   }
 
-  async function handleDelete(post: Post) {
-    const confirmed = window.confirm(`确认删除「${post.title}」吗？`);
-    if (!confirmed) {
+  async function handleEditSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setEditError('');
+    setIsSaving(true);
+
+    if (!editingId) {
+      setEditError('请选择要编辑的 Post');
+      setIsSaving(false);
       return;
     }
 
+    const payload: PostPayload = {
+      title: editForm.title.trim(),
+      body: editForm.body.trim(),
+      userId: session.user.id,
+    };
+
+    if (!payload.title || !payload.body) {
+      setEditError('标题和内容不能为空');
+      setIsSaving(false);
+      return;
+    }
+
+    try {
+      const updatedPost = await updatePost(editingId, payload);
+      setPosts((currentPosts) =>
+        currentPosts.map((post) =>
+          post.id === editingId ? { ...post, ...updatedPost, ...payload } : post,
+        ),
+      );
+      editModalState.close();
+    } catch (caughtError) {
+      setEditError(caughtError instanceof Error ? caughtError.message : '保存 post 失败');
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function handleDelete(post: Post, closeDialog: () => void) {
     setError('');
+    setDeletingId(post.id);
+
     try {
       await deletePost(post.id);
       setPosts((currentPosts) => currentPosts.filter((item) => item.id !== post.id));
       if (editingId === post.id) {
-        resetForm();
+        editModalState.close();
       }
+      closeDialog();
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : '删除 post 失败');
+    } finally {
+      setDeletingId(null);
     }
   }
 
   async function updatePostScope(nextValue: boolean) {
     setShowOnlyMine(nextValue);
-    resetForm();
+    resetCreateForm();
+    editModalState.close();
     await refresh(nextValue);
   }
 
@@ -202,7 +248,7 @@ export function PostsPage({ session, onLogout }: PostsPageProps) {
           <Surface className="summary-card" variant="secondary">
             <span>编辑状态</span>
             <strong>{editingPost ? `#${editingPost.id}` : '新建'}</strong>
-            <small>{editingPost ? editingPost.title : '准备创建新的 Post'}</small>
+            <small>{editingPost ? '弹框编辑中' : '准备创建新的 Post'}</small>
           </Surface>
         </section>
 
@@ -211,20 +257,13 @@ export function PostsPage({ session, onLogout }: PostsPageProps) {
             <Card.Header className="section-header">
               <div>
                 <p className="eyebrow">Editor</p>
-                <Card.Title>{editingPost ? '编辑 Post' : '新增 Post'}</Card.Title>
-                <Card.Description>
-                  {editingPost ? '正在调整已选文章内容。' : '创建后会立即插入当前列表顶部。'}
-                </Card.Description>
+                <Card.Title>新增 Post</Card.Title>
+                <Card.Description>创建后会立即插入当前列表顶部，编辑请从列表弹框打开。</Card.Description>
               </div>
-              {editingPost ? (
-                <Chip color="warning" variant="soft">
-                  编辑 #{editingPost.id}
-                </Chip>
-              ) : null}
             </Card.Header>
             <Separator variant="tertiary" />
             <Card.Content>
-              <form className="stack" onSubmit={handleSubmit}>
+              <form className="stack" onSubmit={handleCreateSubmit}>
                 <Surface className="form-surface" variant="secondary">
                   <div className="field">
                     <Label htmlFor="post-title">标题</Label>
@@ -233,9 +272,9 @@ export function PostsPage({ session, onLogout }: PostsPageProps) {
                       required
                       id="post-title"
                       placeholder="输入一个清晰的 Post 标题"
-                      value={form.title}
+                      value={createForm.title}
                       variant="secondary"
-                      onChange={(event) => setForm({ ...form, title: event.target.value })}
+                      onChange={(event) => setCreateForm({ ...createForm, title: event.target.value })}
                     />
                   </div>
                   <div className="field">
@@ -246,9 +285,9 @@ export function PostsPage({ session, onLogout }: PostsPageProps) {
                       id="post-body"
                       placeholder="写下正文内容..."
                       rows={8}
-                      value={form.body}
+                      value={createForm.body}
                       variant="secondary"
-                      onChange={(event) => setForm({ ...form, body: event.target.value })}
+                      onChange={(event) => setCreateForm({ ...createForm, body: event.target.value })}
                     />
                   </div>
                 </Surface>
@@ -265,13 +304,8 @@ export function PostsPage({ session, onLogout }: PostsPageProps) {
 
                 <div className="form-actions">
                   <Button isDisabled={isSaving} type="submit" variant="primary">
-                    {isSaving ? '保存中...' : editingId ? '保存修改' : '新增 Post'}
+                    {isSaving ? '保存中...' : '新增 Post'}
                   </Button>
-                  {editingId ? (
-                    <Button type="button" variant="secondary" onPress={resetForm}>
-                      取消编辑
-                    </Button>
-                  ) : null}
                 </div>
               </form>
             </Card.Content>
@@ -337,14 +371,44 @@ export function PostsPage({ session, onLogout }: PostsPageProps) {
                       <Button size="sm" type="button" variant="secondary" onPress={() => beginEdit(post)}>
                         编辑
                       </Button>
-                      <Button
-                        size="sm"
-                        type="button"
-                        variant="danger-soft"
-                        onPress={() => void handleDelete(post)}
-                      >
-                        删除
-                      </Button>
+                      <AlertDialog>
+                        <AlertDialog.Trigger>
+                          <Button size="sm" type="button" variant="danger-soft">
+                            删除
+                          </Button>
+                        </AlertDialog.Trigger>
+                        <AlertDialog.Backdrop variant="blur">
+                          <AlertDialog.Container placement="center" size="sm">
+                            <AlertDialog.Dialog>
+                              {({ close }) => (
+                                <>
+                                  <AlertDialog.Header>
+                                    <AlertDialog.Icon status="danger" />
+                                    <AlertDialog.Heading>删除 Post</AlertDialog.Heading>
+                                  </AlertDialog.Header>
+                                  <AlertDialog.Body>
+                                    确认删除「{post.title}」吗？该操作会调用删除接口，并从当前列表移除这篇
+                                    Post。
+                                  </AlertDialog.Body>
+                                  <AlertDialog.Footer>
+                                    <Button slot="close" type="button" variant="secondary">
+                                      取消
+                                    </Button>
+                                    <Button
+                                      isDisabled={deletingId === post.id}
+                                      type="button"
+                                      variant="danger-soft"
+                                      onPress={() => void handleDelete(post, close)}
+                                    >
+                                      {deletingId === post.id ? '删除中...' : '确认删除'}
+                                    </Button>
+                                  </AlertDialog.Footer>
+                                </>
+                              )}
+                            </AlertDialog.Dialog>
+                          </AlertDialog.Container>
+                        </AlertDialog.Backdrop>
+                      </AlertDialog>
                     </Card.Footer>
                   </Card>
                 ))}
@@ -353,6 +417,72 @@ export function PostsPage({ session, onLogout }: PostsPageProps) {
           </Card>
         </section>
       </main>
+
+      <Modal state={editModalState}>
+        <Modal.Backdrop variant="blur">
+          <Modal.Container placement="center" scroll="inside" size="lg">
+            <Modal.Dialog>
+              <Modal.Header>
+                <div>
+                  <p className="eyebrow">Editor</p>
+                  <Modal.Heading>编辑 Post</Modal.Heading>
+                  <p>正在调整 {editingPost ? `#${editingPost.id}` : '已选'} 文章内容。</p>
+                </div>
+                <Modal.CloseTrigger aria-label="关闭编辑弹框" />
+              </Modal.Header>
+              <Modal.Body>
+                <form className="stack" id="edit-post-form" onSubmit={handleEditSubmit}>
+                  <Surface className="form-surface" variant="secondary">
+                    <div className="field">
+                      <Label htmlFor="edit-post-title">标题</Label>
+                      <Input
+                        fullWidth
+                        required
+                        id="edit-post-title"
+                        placeholder="输入一个清晰的 Post 标题"
+                        value={editForm.title}
+                        variant="secondary"
+                        onChange={(event) => setEditForm({ ...editForm, title: event.target.value })}
+                      />
+                    </div>
+                    <div className="field">
+                      <Label htmlFor="edit-post-body">内容</Label>
+                      <TextArea
+                        fullWidth
+                        required
+                        id="edit-post-body"
+                        placeholder="写下正文内容..."
+                        rows={8}
+                        value={editForm.body}
+                        variant="secondary"
+                        onChange={(event) => setEditForm({ ...editForm, body: event.target.value })}
+                      />
+                    </div>
+                  </Surface>
+
+                  {editError ? (
+                    <Alert status="danger">
+                      <Alert.Indicator />
+                      <Alert.Content>
+                        <Alert.Title>保存失败</Alert.Title>
+                        <Alert.Description>{editError}</Alert.Description>
+                      </Alert.Content>
+                    </Alert>
+                  ) : null}
+                </form>
+              </Modal.Body>
+              <Modal.Footer>
+                <Button type="button" variant="secondary" onPress={editModalState.close}>
+                  取消
+                </Button>
+                <Button form="edit-post-form" isDisabled={isSaving} type="submit" variant="primary">
+                  {isSaving ? '保存中...' : '保存修改'}
+                </Button>
+              </Modal.Footer>
+            </Modal.Dialog>
+          </Modal.Container>
+        </Modal.Backdrop>
+      </Modal>
     </div>
   );
 }
